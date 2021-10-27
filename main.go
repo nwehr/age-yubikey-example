@@ -45,7 +45,15 @@ func main() {
 
 	defer messageFile.Close()
 
-	identity, err := decryptIdentity(keyFile)
+	yubikey, err := yubikey()
+	if err != nil {
+		fmt.Printf("could not open card: %v\n", err)
+		os.Exit(1)
+	}
+
+	defer yubikey.Close()
+
+	identity, err := protectedIdentity(keyFile, yubikey, piv.SlotCardAuthentication)
 	if err != nil {
 		fmt.Printf("could not get identity: %v\n", err)
 		os.Exit(1)
@@ -60,25 +68,20 @@ func main() {
 	io.Copy(os.Stdout, decrypter)
 }
 
-func decryptIdentity(r io.Reader) (age.Identity, error) {
+func protectedIdentity(r io.Reader, yubikey *piv.YubiKey, slot piv.Slot) (age.Identity, error) {
 	decoded, err := ioutil.ReadAll(ascii85.NewDecoder(r))
 	if err != nil {
 		return nil, fmt.Errorf("could not read message file: %v", err)
 	}
 
-	yubikey, err := yubikey()
-	if err != nil {
-		return nil, fmt.Errorf("could not open card: %v", err)
-	}
-
-	cert, err := yubikey.Certificate(piv.SlotCardAuthentication)
+	cert, err := yubikey.Attest(slot)
 	if err != nil {
 		return nil, fmt.Errorf("could not get certificate: %v", err)
 	}
 
-	priv, err := yubikey.PrivateKey(piv.SlotCardAuthentication, cert.PublicKey, piv.KeyAuth{PINPrompt: ttyPin, PINPolicy: piv.PINPolicyOnce})
+	priv, err := yubikey.PrivateKey(slot, cert.PublicKey, piv.KeyAuth{PINPrompt: ttyPin, PINPolicy: piv.PINPolicyOnce})
 	if err != nil {
-		return nil, fmt.Errorf("could not get private key: %v", err)
+		return nil, fmt.Errorf("could not setup private key: %v", err)
 	}
 
 	decrypter, ok := priv.(crypto.Decrypter)
@@ -120,12 +123,12 @@ func yubikey() (*piv.YubiKey, error) {
 	}
 
 	if len(cards) == 0 {
-		return nil, fmt.Errorf("no yubikey detected")
+		return nil, fmt.Errorf("no cards detected")
 	}
 
 	yubikey, err := piv.Open(cards[0])
 	if err != nil {
-		return nil, fmt.Errorf("could not open card: %v", err)
+		return nil, fmt.Errorf("could not open card %s: %v", cards[0], err)
 	}
 
 	return yubikey, nil
@@ -147,7 +150,7 @@ func setup() error {
 
 	yubikey, err := yubikey()
 	if err != nil {
-		return fmt.Errorf("could not open card: %v", err)
+		return fmt.Errorf("could not get yubikey: %v", err)
 	}
 
 	cert, err := yubikey.Certificate(piv.SlotCardAuthentication)
